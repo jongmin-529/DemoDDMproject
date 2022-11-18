@@ -1,0 +1,7 @@
+study,comparison,parameter,pvalue,leftBigger,sig
+tms,visit2 x visit3,v,0.468878,+,n.s.
+tms,visit3 x visit4,v,0.48453500000000005,+,n.s.
+tms,visit2 x visit4,v,0.452697,+,n.s.
+tms,visit2 x visit3,a,0.484363,+,n.s.
+tms,visit3 x visit4,a,0.19105700000000003,+,n.s.
+tms,visit2 x visit4,a,0.17487399999999997,+,n.s.

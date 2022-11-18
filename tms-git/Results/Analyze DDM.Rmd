@@ -1,0 +1,987 @@
+---
+title: "Crowdsourcing Punishment: DDM Analyses"
+author: "Jae-Young Son"
+date: "Last modified July 9, 2019"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+# Initialize workspace
+
+```{r Libraries and paths, message=F, warning=F}
+# Load libraries
+libraryBooks <- c("knitr", "tidyverse")
+invisible(lapply(libraryBooks, require, character.only=TRUE)); rm(libraryBooks)
+
+# Set paths
+basePath <- "/Users/jongminlee/Desktop/Files/nee_lab/DDM/tms/"
+dataPath.3 <- paste0(basePath, "Results/")
+dataPath.4 <- paste0(basePath, "Results/")
+savePath <- paste0(basePath, "DataAnalysis/SavedResults/")
+plotPath <- paste0(basePath, "DataAnalysis/Plots/")
+```
+
+```{r Read in data, message=F, warning=F}
+# MCMC traces: Categorical
+traces.cat <- bind_rows(
+  read_csv(paste0(dataPath.3, "m04_va_visit2_traces.csv")) %>%
+    mutate(study="tms", fair="visit2"),
+  read_csv(paste0(dataPath.3, "m04_va_visit3_traces.csv")) %>%
+    mutate(study="tms", fair="visit3"),
+  read_csv(paste0(dataPath.3, "m04_va_visit4_traces.csv")) %>%
+    mutate(study="tms", fair="visit4")) %>%
+  mutate(study = factor(study, levels=c("tms")),
+         fair = factor(fair, levels=c("visit2", "visit3", "visit4"))) %>%
+  select(study, fair,
+         vA = v_Intercept,
+         v0 = `v_C(cond, Treatment('Base'))[T.Dual]`,
+         v1 = `v_C(cond, Treatment('Delay'))[T.Switch]`,
+         v2 = `v_C(cond, Treatment('Delay'))[T.Base]`,
+         aA = a_Intercept,
+         a0 = `a_C(cond, Treatment('Delay'))[T.Dual]`,
+         a1 = `a_C(cond, Treatment('Delay'))[T.Switch]`,
+         a2 = `a_C(cond, Treatment('Delay'))[T.Base]`,
+         t) %>%
+  group_by(study, fair) %>%
+  nest() %>%
+  mutate(mapID = as.character(row_number()))
+
+traces.cat[4]=as.character(c(1,2,3))
+
+write_csv(traces.cat[[3]][[1]],
+          path=paste0(savePath, "traces_cat_visit2.csv"))
+write_csv(traces.cat[[3]][[2]],
+          path=paste0(savePath, "traces_cat_visit3.csv"))
+write_csv(traces.cat[[3]][[3]],
+          path=paste0(savePath, "traces_cat_visit4.csv"))
+```
+
+```{r ggplot templates}
+# Color palettes
+revColors <- c("#2171b5", "#9ecae1", "#807dba", "#fcae91", "#de2d26", "#525252")
+fairColors <- c("#bae4bc", "#7bccc4", "#2b8cbe")
+
+# Base template
+gg <- list(
+  theme_bw(),
+  theme(plot.title = element_text(hjust = 0.5, size=13),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.spacing = unit(0.75, "lines"),
+        legend.box.spacing = unit(0.5, "lines"),
+        legend.position = "bottom",
+        legend.margin = margin(c(0, 0, 0, 0), unit='lines'))
+)
+
+# Density template
+ggdensity <- list(
+  gg,
+  geom_density(size=0.5, alpha=0.1),
+  theme(panel.spacing = unit(0.25, "lines"),
+        legend.key.size = unit(0.7, "lines"),
+        legend.direction = "horizontal",
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank(),
+        legend.box.spacing = unit(0.25, "lines"))
+)
+```
+
+
+&nbsp;
+&nbsp;
+
+
+# Analyze results
+
+The models being analyzed below have been selected on the basis of our **a priori** hypotheses about what parameters might be affected by group influence, as well as the model comparison statistic DIC (akin to AIC/BIC). All models were previously checked for convergence using the r-hat statistic.
+
+
+## Parameter estimates & test against null
+
+The following results are conceptually akin to performing a t-test of each parameter's mean value against 0 (or 0.5 in the case of **z**).
+
+```{r}
+test.params <- function(df) {
+  inner_join(df %>%
+               map_dfr(mean) %>%
+               gather(parameter, estimate, everything()),
+             bind_rows(df %>%
+                         # select(-z) %>%
+                         map(~ .x > 0) %>%
+                         map_dfr(mean) %>%
+                         gather(parameter, pvalue, everything()) %>%
+                         mutate(pvalue = if_else(round(pvalue)==1, 1-pvalue, pvalue),
+                                sig = if_else(pvalue < 0.001, "***",
+                                              if_else(pvalue < 0.01, "**",
+                                                      if_else(pvalue < 0.05, "*", "n.s."))))
+
+                      )
+             )
+             
+             
+}
+```
+
+### Categorical
+
+```{r, message=F}
+save.param.cat <- map_dfr(traces.cat$data, test.params, .id="mapID") %>%
+  left_join(x=., y=traces.cat %>% select(-data)) %>%
+  select(mapID, study, fair, everything())
+
+save.param.cat %>% kable()
+
+write_csv(save.param.cat,
+          path=paste0(savePath, "param_est_cat.csv"))
+```
+
+### Continuous
+
+```{r, message=F}
+# save.param.con <- map_dfr(traces.con$data, test.params, .id="mapID") %>%
+#   left_join(x=., y=traces.con %>% select(-data)) %>%
+#   select(mapID, study, fair, everything())
+# 
+# save.param.con %>% kable()
+# 
+# write_csv(save.param.con,
+#           path=paste0(savePath, "param_est_con.csv"))
+```
+
+
+&nbsp;
+
+
+## Test pairwise comparisons
+
+```{r, message=F}
+test.pairwise <- function(df) {
+  df %>%
+    summarise(
+              # vA0 = mean(vA > v0),
+              # vA1 = mean(vA > v1),
+              # vA2 = mean(vA > v2),
+              v01 = mean(v0 > v1),
+              v02 = mean(v0 > v2),
+              v12 = mean(v1 > v2),
+              # aA0 = mean(aA > a0),
+              # aA1 = mean(aA > a1),
+              # aA2 = mean(aA > a2),
+              a01 = mean(a0 > a1),
+              a02 = mean(a0 > a2),
+              a12 = mean(a1 > a2)) %>%
+    gather(comparison, pvalue, everything()) %>%
+    mutate(pvalue = if_else(round(pvalue)==1, 1-pvalue, pvalue),
+           sig = if_else(pvalue < 0.001, "***",
+                         if_else(pvalue < 0.01, "**",
+                                 if_else(pvalue < 0.05, "*", "n.s."))))
+}
+
+save.param.pairwise <- map_dfr(traces.cat$data, test.pairwise, .id="mapID") %>%
+  left_join(x=., y=traces.cat %>% select(-data)) %>%
+  select(mapID, study, fair, everything())
+
+save.param.pairwise %>% kable()
+
+write_csv(save.param.pairwise,
+          path=paste0(savePath, "param_pairwise.csv"))
+```
+
+
+&nbsp;
+
+
+## Test effects of fairness on % punishers
+
+```{r}
+# Calculate p-values for a single comparison
+test.fairness.calcPValues <- function(df, whichStudy, fair1, fair2, compareThisParam) {
+  mean(df %>% filter(study==whichStudy, fair==fair1) %>% select(compareThisParam) >
+         df %>% filter(study==whichStudy, fair==fair2) %>% select(compareThisParam)) %>%
+    tibble(study=whichStudy, comparison=paste(fair1, "x", fair2),
+           parameter=compareThisParam, pvalue = .) %>%
+    mutate(leftBigger = if_else(round(pvalue)==1, "+", "-"),
+           pvalue = if_else(round(pvalue)==1, 1-pvalue, pvalue),
+           sig = if_else(pvalue < 0.001, "***",
+                         if_else(pvalue < 0.01, "**",
+                                 if_else(pvalue < 0.05, "*", "n.s."))))
+}
+
+# Shuffle rows of dataframe
+test.fairness.cat <- function(df, nShuffles) {
+  df <- df %>%
+    unnest() %>%
+    group_by(study, fair) %>%
+    sample_frac(size=nShuffles, replace=T) %>%
+    mutate(compareV = 4*vA + v0 + v1 + v2,
+           compareA = 4*aA + a0 + a1 + a2) %>%
+    select(study, fair, v=compareV, a=compareA) %>%
+    # select(study, fair, v=compareV, a=compareA, z) %>%
+    ungroup()
+  
+  bind_rows(
+    test.fairness.calcPValues(df, "tms", "visit2", "visit3", "v"),
+    test.fairness.calcPValues(df, "tms", "visit3", "visit4", "v"),
+    test.fairness.calcPValues(df, "tms", "visit2", "visit4", "v"),
+    test.fairness.calcPValues(df, "tms", "visit2", "visit3", "a"),
+    test.fairness.calcPValues(df, "tms", "visit3", "visit4", "a"),
+    test.fairness.calcPValues(df, "tms", "visit2", "visit4", "a")
+
+  )
+}
+
+```
+
+### Categorical
+
+```{r}
+save.fairness.cat <- test.fairness.cat(traces.cat, 100)
+save.fairness.cat %>% kable()
+write_csv(save.fairness.cat,
+          path=paste0(savePath, "param_fairness_cat.csv"))
+```
+
+### Continuous
+
+```{r}
+save.fairness.con <- test.fairness.con(traces.con, 100)
+save.fairness.con %>% kable()
+write_csv(save.fairness.con,
+          path=paste0(savePath, "param_fairness_con.csv"))
+```
+
+&nbsp;
+
+
+## Test misc threshold effects
+```{r, message=F}
+# Is average threshold lower in groups where a majority opinion has been established (relative to evenly-split groups)?
+test.threshold.moralMajority <- function(df) {
+  df %>%
+    mutate(aMajorityVsEvenSplit = ((aA*4 + a0 + a1 + a3 + a4)/4) > (aA + a2)) %>%
+    summarise(aMajorityVsEvenSplit = mean(aMajorityVsEvenSplit)) %>%
+    gather(comparison, pvalue, everything()) %>%
+    mutate(leftBigger = if_else(round(pvalue)==1, "+", "-"),
+           pvalue = if_else(round(pvalue)==1, 1-pvalue, pvalue),
+           sig = if_else(pvalue < 0.001, "***",
+                         if_else(pvalue < 0.01, "**",
+                                 if_else(pvalue < 0.05, "*", "n.s."))))
+}
+
+save.threshold.moralMajority <- map_dfr(traces.cat$data,
+                                        test.threshold.moralMajority, .id="mapID") %>%
+  left_join(x=., y=traces.cat %>% select(-data)) %>%
+  select(mapID, study, fair, everything())
+
+save.threshold.moralMajority %>% kable()
+
+write_csv(save.threshold.moralMajority,
+          path=paste0(savePath, "threshold_moralMajority", ".csv"))
+
+
+# Is there a significant difference in average threshold for Victims/Jurors?
+test.threshold.VictimJuror <- function(df, this.fair, nShuffles) {
+  victim <- df %>%
+    filter(fair==this.fair & study=="Victim") %>%
+    unnest() %>%
+    sample_frac(size=nShuffles, replace=T) %>%
+    mutate(victim.sumFair = aA*6+a0+a1+a2+a3+a4) %>%
+    select(victim.sumFair)
+  
+  juror <- df %>%
+    filter(fair==this.fair & study=="Juror") %>%
+    unnest() %>%
+    sample_frac(size=nShuffles, replace=T) %>%
+    mutate(juror.sumFair = aA*6+a0+a1+a2+a3+a4) %>%
+    select(juror.sumFair)
+  
+  bind_cols(victim, juror) %>%
+    mutate(victimThresholdHigher = victim.sumFair > juror.sumFair) %>%
+    summarise(pvalue = mean(victimThresholdHigher)) %>%
+    mutate(comparison = this.fair,
+           victimBigger = if_else(round(pvalue)==1, "+", "-"),
+           pvalue = if_else(round(pvalue)==1, 1-pvalue, pvalue),
+           sig = if_else(pvalue < 0.001, "***",
+                         if_else(pvalue < 0.01, "**",
+                                 if_else(pvalue < 0.05, "*", "n.s.")))) %>%
+    select(comparison, victimBigger, pvalue, sig)
+}
+
+save.threshold.VictimJuror <- bind_rows(
+  test.threshold.VictimJuror(traces.cat, "Mildly Unfair", 100),
+  test.threshold.VictimJuror(traces.cat, "Somewhat Unfair", 100),
+  test.threshold.VictimJuror(traces.cat, "Highly Unfair", 100)
+)
+
+save.threshold.VictimJuror %>% kable()
+
+write_csv(save.threshold.VictimJuror,
+          path=paste0(savePath, "threshold_VictimJuror", ".csv"))
+
+
+# Continuous model: Is there a significant difference in drift rate for Victims/Jurors?
+test.drift.VictimJuror <- function(df, this.fair, nShuffles) {
+  victim <- df %>%
+    filter(fair==this.fair & study=="Victim") %>%
+    unnest() %>%
+    sample_frac(size=nShuffles, replace=T) %>%
+    select(victim.vRev = vRev)
+  
+  juror <- df %>%
+    filter(fair==this.fair & study=="Juror") %>%
+    unnest() %>%
+    sample_frac(size=nShuffles, replace=T) %>%
+    select(juror.vRev = vRev)
+  
+  bind_cols(victim, juror) %>%
+    mutate(victimDriftHigher = victim.vRev > juror.vRev) %>%
+    summarise(pvalue = mean(victimDriftHigher)) %>%
+    mutate(comparison = this.fair,
+           victimBigger = if_else(round(pvalue)==1, "+", "-"),
+           pvalue = if_else(round(pvalue)==1, 1-pvalue, pvalue),
+           sig = if_else(pvalue < 0.001, "***",
+                         if_else(pvalue < 0.01, "**",
+                                 if_else(pvalue < 0.05, "*", "n.s.")))) %>%
+    select(comparison, victimBigger, pvalue, sig)
+}
+
+save.drift.VictimJuror <- bind_rows(
+  test.drift.VictimJuror(traces.con, "Mildly Unfair", 100),
+  test.drift.VictimJuror(traces.con, "Somewhat Unfair", 100),
+  test.drift.VictimJuror(traces.con, "Highly Unfair", 100)
+)
+
+save.drift.VictimJuror %>% kable()
+
+write_csv(save.drift.VictimJuror,
+          path=paste0(savePath, "drift_VictimJuror_con", ".csv"))
+```
+
+
+&nbsp;
+&nbsp;
+
+
+# Plot results of categorical model
+
+```{r}
+# Prep bars (estimated parameter means) for plotting
+plot.ddm.cat <- save.param.cat %>%
+  # Extract out the plotting variables
+  separate(parameter, c("parameter", "cond"), 1) %>%
+  # mutate(rev = if_else(parameter=="z", "A", rev)) %>%
+  group_by(study, fair, parameter) %>%
+  # Compute the mean of each bar
+  mutate(Mean = if_else(cond=="A", estimate, estimate+first(estimate))) %>%
+  ungroup()
+
+# Prep pairwise comparisons for plotting
+plot.pairwise.cat <- save.param.pairwise %>%
+  # Extract out the plotting variables
+  separate(comparison, c("parameter", "comparison"), 1) %>%
+  separate(comparison, c("cond1", "cond2"), 1)
+```
+
+## Categorical: drift rate (v)
+
+```{r}
+# Means of Alone conditions
+plot.cat.v.alone <- plot.ddm.cat %>%
+  filter(parameter=="v" & cond=="A") %>%
+  select(study, fair, parameter, estimate)
+
+# Position annotations
+plot.cat.v <- plot.ddm.cat %>%
+  filter(parameter=="v" & cond !="A") %>%
+  # Calculate where annotations will be drawn
+  mutate(sigText = if_else(Mean>=0, Mean+0.1, Mean-0.1),
+         sigBar = if_else(Mean>=0, sigText+0.6, sigText-0.6),
+         sigText = if_else(sig=="n.s." & Mean>=0, sigText+0.1,
+                           if_else(sig=="n.s.", sigText-0.05, sigText))) %>%
+  # Adjust annotation size and orientation (stars are asymmetrical)
+  mutate(textsize.mean = if_else(sig=="n.s.", 3, 4),
+         textangle.mean = if_else(sig=="n.s."|Mean>0, 0, 180))
+
+plot.cat.v.pairwise <- plot.pairwise.cat %>%
+  filter(parameter=="v") %>%
+  # Some joining magic to get ahold of annotation adjustments
+  left_join(.,
+            plot.cat.v %>%
+              select(-c(estimate, pvalue, sig, sigText, textsize.mean, textangle.mean)),
+            by=c("mapID", "study", "fair", "parameter", "cond1" = "cond")) %>%
+  left_join(.,
+            plot.cat.v %>%
+              select(-c(estimate, pvalue, sig, sigText, textsize.mean, textangle.mean)),
+            by=c("mapID", "study", "fair", "parameter", "cond2" = "cond")) %>%
+  # Annotations for pairwise comparisons could be relative to either of the bars being compared
+  # so this selects which of the two bars serves as the reference point
+  mutate(Mean = if_else(Mean.x > Mean.y, Mean.x, Mean.y),
+         sigBar = if_else(Mean >= 0,
+                          if_else(sigBar.x > sigBar.y, sigBar.x, sigBar.y),
+                          if_else(sigBar.x < sigBar.y, sigBar.x, sigBar.y)),
+         sigBarText = if_else(Mean>=0, sigBar+0.1, sigBar-0.1)) %>%
+  select(-c(Mean.x, Mean.y, sigBar.x, sigBar.y)) %>%
+  # Define x-coordinates where annotations should be drawn
+  mutate(cond1 = as.numeric(cond1),
+         cond1 = cond1 + 1,
+         cond2 = as.numeric(cond2),
+         cond2 = cond2 + 1,
+         sigBarTextX = (cond1+cond2)/2) %>%
+  # Adjust annotation size and orientation (stars are asymmetrical)
+  mutate(textsize.mean = if_else(sig=="n.s.", 4, 5),
+         textangle.mean = if_else(sig=="n.s."|Mean>0, 0, 180)) %>%
+  mutate(sigBarText = if_else(sig=="n.s." & Mean>=0, sigBarText+0.1,
+                              if_else(sig=="n.s.", sigBarText-0.1, sigBarText)))
+
+# Plot
+ggplot(plot.cat.v, aes(x=cond, y=Mean)) +
+  facet_grid(study ~ fair) +
+  geom_hline(yintercept=0, color="black") +
+  geom_hline(data=plot.cat.v.alone, aes(yintercept=estimate),
+             linetype="dashed", color="#bdbdbd") +
+  gg +
+  geom_bar(stat="identity", position=position_dodge(), color="black", aes(fill=cond)) +
+  geom_text(aes(label = round(Mean, digits = 2)), vjust=-0.3)
+  ylab("Drift Rate (v)") +
+  scale_x_discrete(name="Conditions", labels=c("Dual", "Switch", "Base")) +
+  scale_fill_manual(values=revColors) +
+  coord_cartesian(ylim = c(-3, 2)) + guides(fill=FALSE) +
+  geom_text(data=plot.cat.v,
+            size=plot.cat.v$textsize.mean,
+            angle=plot.cat.v$textangle.mean,
+            aes(x=rep(c(1:3), times=3), y=sigText, label=sig)) +
+  geom_text(data=plot.cat.v.pairwise,
+            size=plot.cat.v.pairwise$textsize.mean,
+            angle=plot.cat.v.pairwise$textangle.mean,
+            aes(x=sigBarTextX, y=sigBarText, label=sig)) +
+  geom_segment(data=plot.cat.v.pairwise, aes(x=cond1, xend=cond2, y=sigBar, yend=sigBar), size=0.5)
+
+ggsave(paste0(plotPath, "Fig 5 Drift Rate", ".pdf"),
+       plot=last_plot(), height=6, width=10, units='in', dpi=300, useDingbats=FALSE)
+```
+
+
+## Categorical: threshold (a)
+
+```{r}
+# Means of Alone conditions
+plot.cat.a.alone <- plot.ddm.cat %>%
+  filter(parameter=="a" & cond=="A") %>%
+  select(study, fair, parameter, estimate)
+
+# Position annotations
+plot.cat.a <- plot.ddm.cat %>%
+  filter(parameter=="a" & cond!="A") %>%
+  # Calculate where annotations will be drawn
+  mutate(sigText = if_else(sig=="n.s.", Mean+0.1, Mean+0.05),
+         sigBar = sigText+0.1) %>%
+  # Adjust annotation size
+  mutate(textsize.mean = if_else(sig=="n.s.", 3, 4))
+
+plot.cat.a.pairwise <- plot.pairwise.cat %>%
+  filter(parameter=="a") %>%
+  # Some joining magic to get ahold of annotation adjustments
+  left_join(.,
+            plot.cat.a %>% select(-c(estimate, pvalue, sig, sigText, textsize.mean)),
+            by=c("mapID", "study", "fair", "parameter", "cond1" = "cond")) %>%
+  left_join(.,
+            plot.cat.a %>% select(-c(estimate, pvalue, sig, sigText, textsize.mean)),
+            by=c("mapID", "study", "fair", "parameter", "cond2" = "cond")) %>%
+  # Annotations for pairwise comparisons could be relative to either of the bars being compared
+  # so this selects which of the two bars serves as the reference point
+  mutate(Mean = if_else(Mean.x > Mean.y, Mean.x, Mean.y),
+         sigBar = if_else(sigBar.x > sigBar.y, sigBar.x, sigBar.y)) %>%
+  select(-c(Mean.x, Mean.y, sigBar.x, sigBar.y)) %>%
+  # Fix some of the comparison lines manually
+  mutate(sigBar = if_else(cond1==0 & cond2==4, 2.9, sigBar),
+         sigBar = if_else(cond1==1 & cond2==3, 2.7, sigBar),
+         sigBarText = if_else(sig=="n.s.", sigBar+0.1, sigBar+0.05)) %>%
+  # Define x-coordinates where annotations should be drawn
+  mutate(cond1 = as.numeric(cond1),
+         cond1 = cond1 + 1 + 0.2,
+         cond2 = as.numeric(cond2),
+         cond2 = cond2 + 1 - 0.2,
+         sigBarTextX = (cond1+cond2)/2) %>%
+  # Adjust annotation size
+  mutate(textsize.mean = if_else(sig=="n.s.", 3.5, 5))
+
+# Plot
+ggplot(plot.cat.a, aes(x=cond, y=Mean)) +
+  facet_grid(study ~ fair) +
+  geom_hline(yintercept=0, color="black") +
+  geom_hline(data=plot.cat.a.alone, aes(yintercept=estimate),
+             linetype="dashed", color="#bdbdbd") +
+  gg +
+  geom_bar(stat="identity", position=position_dodge(), color="black", aes(fill=cond)) +
+  ylab("Threshold (a)") +
+  scale_x_discrete(name="% Punishers", labels=c("Dual", "Switch", "Base")) +
+  scale_fill_manual(values=revColors) +
+  coord_cartesian(ylim = c(1.5, 3)) + guides(fill=FALSE) +
+  geom_text(data=plot.cat.a,
+            size=plot.cat.a$textsize.mean,
+            aes(x=rep(c(1:5), times=6), y=sigText, label=sig)) +
+  geom_text(data=plot.cat.a.pairwise,
+            size=plot.cat.a.pairwise$textsize.mean,
+            aes(x=sigBarTextX, y=sigBarText, label=sig)) +
+  geom_segment(data=plot.cat.a.pairwise, aes(x=cond1, xend=cond2, y=sigBar, yend=sigBar),
+               size=0.5) +
+  # Manually add "feet" to the longer significance lines
+  geom_segment(aes(x=1.2, xend=1.2, y=2.90, yend=2.85), size=0.5) +
+  geom_segment(aes(x=4.8, xend=4.8, y=2.90, yend=2.85), size=0.5) +
+  geom_segment(aes(x=2.2, xend=2.2, y=2.70, yend=2.65), size=0.5) +
+  geom_segment(aes(x=3.8, xend=3.8, y=2.70, yend=2.65), size=0.5)
+
+ggsave(paste0(plotPath, "Fig 4 Threshold", ".pdf"),
+       plot=last_plot(), height=6, width=10, units='in', dpi=300, useDingbats=FALSE)
+```
+
+## Categorical: bias (z)
+
+```{r}
+plot.cat.z <- traces.cat %>%
+  unnest() %>%
+  select(study, fair, z)
+
+ggplot(plot.cat.z, aes(z, color=fair)) +
+  facet_grid(study ~ .) +
+  geom_vline(xintercept=0.5, linetype="dotted", size=0.6, color="#bdbdbd") +
+  ggdensity +
+  geom_hline(yintercept=0, linetype="solid", size=0.5, color="black") +
+  ggtitle("Bias (z), Categorical Model") +
+  xlab('Estimated Coefficient') +
+  ylab('Posterior Probability Density') +
+  scale_color_manual(name='Offer Unfairness:', values=fairColors)
+
+ggsave(paste0(plotPath, "Fig S6A Bias cat", ".pdf"),
+       plot=last_plot(), height=5, width=5, units='in', dpi=300, useDingbats=FALSE)
+```
+
+
+## Categorical posterior: threshold (a)
+
+```{r}
+plot.cat.a.posterior <- traces.cat %>%
+  unnest() %>%
+  select(study, fair, aA:a4) %>%
+  gather(cond, value, aA:a4) %>%
+  mutate(cond = recode(cond, "aA"="Alone", "a0"="0", "a1"="25", "a2"="50", "a3"="75", "a4"="100"),
+         cond = factor(cond, levels=c("0", "25", "50", "75", "100", "Alone")))
+
+ggplot(plot.cat.a.posterior, aes(value, color=cond)) +
+  facet_grid(fair ~ study) +
+  geom_vline(xintercept=0, linetype="dotted", size=0.6, color="#bdbdbd") +
+  ggdensity +
+  geom_hline(yintercept=0, linetype="solid", size=0.5, color="black") +
+  ggtitle("Threshold (a), Categorical Model") +
+  xlab('Estimated Coefficient for % Punishers') +
+  ylab('Posterior Probability Density') +
+  scale_color_manual(name='% Punishers:', values=revColors)
+
+ggsave(paste0(plotPath, "Fig S6B Threshold cat", ".pdf"),
+       plot=last_plot(), height=5, width=5, units='in', dpi=300, useDingbats=FALSE)
+```
+
+
+## Categorical posterior: drift rate (v)
+
+```{r}
+plot.cat.v.posterior <- traces.cat %>%
+  unnest() %>%
+  select(study, fair, vA:v4) %>%
+  gather(cond, value, vA:v4) %>%
+  mutate(cond = recode(cond, "vA"="Alone", "v0"="0", "v1"="25", "v2"="50", "v3"="75", "v4"="100"),
+         cond = factor(cond, levels=c("0", "25", "50", "75", "100", "Alone")))
+
+ggplot(plot.cat.v.posterior, aes(value, color=cond)) +
+  facet_grid(fair ~ study) +
+  geom_vline(xintercept=0, linetype="dotted", size=0.6, color="#bdbdbd") +
+  ggdensity +
+  geom_hline(yintercept=0, linetype="solid", size=0.5, color="black") +
+  ggtitle("Drift Rate (v), Categorical Model") +
+  xlab('Estimated Coefficient for % Punishers') +
+  ylab('Posterior Probability Density') +
+  scale_color_manual(name='% Punishers:', values=revColors)
+
+ggsave(paste0(plotPath, "Fig S6C Drift cat", ".pdf"),
+       plot=last_plot(), height=5, width=5, units='in', dpi=300, useDingbats=FALSE)
+```
+
+
+&nbsp;
+&nbsp;
+
+
+# Plot results of continuous model
+
+## Continuous: bias (z)
+
+```{r}
+plot.con.z <- traces.con %>%
+  unnest() %>%
+  select(study, fair, z)
+
+ggplot(plot.con.z, aes(z, color=fair)) +
+  facet_grid(study ~ .) +
+  geom_vline(xintercept=0.5, linetype="dotted", size=0.6, color="#bdbdbd") +
+  ggdensity +
+  geom_hline(yintercept=0, linetype="solid", size=0.5, color="black") +
+  ggtitle("Bias (z), Continuous Model") +
+  xlab('Estimated Coefficient') +
+  ylab('Posterior Probability Density') +
+  scale_color_manual(name='Offer Unfairness:', values=fairColors)
+
+ggsave(paste0(plotPath, "Fig S6D Bias con", ".pdf"),
+       plot=last_plot(), height=5, width=5, units='in', dpi=300, useDingbats=FALSE)
+```
+
+
+## Continuous: threshold (a)
+
+```{r}
+plot.con.a <- traces.con %>%
+  unnest() %>%
+  select(study, fair, a0:a4) %>%
+  gather(rev, value, a0:a4) %>%
+  mutate(rev = recode(rev, "a0"="0", "a1"="25", "a2"="50", "a3"="75", "a4"="100"),
+         rev = factor(rev, levels=c("0", "25", "50", "75", "100")))
+
+ggplot(plot.con.a, aes(value, color=rev)) +
+  facet_grid(fair ~ study) +
+  geom_vline(xintercept=0, linetype="dotted", size=0.6, color="#bdbdbd") +
+  ggdensity +
+  geom_hline(yintercept=0, linetype="solid", size=0.5, color="black") +
+  ggtitle("Threshold (a), Continuous Model") +
+  xlab('Estimated Coefficient for % Punishers') +
+  ylab('Posterior Probability Density') +
+  scale_color_manual(name='% Punishers:', values=revColors)
+
+ggsave(paste0(plotPath, "Fig S6E Threshold con", ".pdf"),
+       plot=last_plot(), height=5, width=5, units='in', dpi=300, useDingbats=FALSE)
+```
+
+
+## Continuous: drift rate (v)
+
+```{r}
+plot.con.v <- traces.con %>%
+  unnest() %>%
+  select(study, fair, vIntercept, vRev) %>%
+  gather(parameter, value, vIntercept, vRev) %>%
+  mutate(parameter = recode(parameter, "vIntercept"="Intercept", "vRev"="Beta for % Punishers"),
+         parameter = factor(parameter, levels=c("Intercept", "vRev"="Beta for % Punishers")))
+
+ggplot(plot.con.v %>% filter(parameter=="Intercept"), aes(value, color=fair)) +
+  facet_grid(study ~ parameter) +
+  ggdensity +
+  geom_hline(yintercept=0, linetype="solid", size=0.5, color="black") +
+  ggtitle("Drift Rate (v), Continuous Model") +
+  xlab('Estimated Coefficient') +
+  ylab('Posterior Probability Density') +
+  scale_color_manual(name='Offer Unfairness:', values=fairColors)
+
+ggsave(paste0(plotPath, "Fig 6A Drift con intercept", ".pdf"),
+       plot=last_plot(), height=5, width=5, units='in', dpi=300, useDingbats=FALSE)
+
+ggplot(plot.con.v %>% filter(parameter!="Intercept"), aes(value, color=fair)) +
+  facet_grid(study ~ parameter) +
+  ggdensity +
+  geom_hline(yintercept=0, linetype="solid", size=0.5, color="black") +
+  ggtitle("Drift Rate (v), Continuous Model") +
+  xlab('Estimated Coefficient') +
+  ylab('Posterior Probability Density') +
+  scale_color_manual(name='Offer Unfairness:', values=fairColors)
+
+ggsave(paste0(plotPath, "Fig 6B Drift con beta", ".pdf"),
+       plot=last_plot(), height=5, width=5, units='in', dpi=300, useDingbats=FALSE)
+```
+
+
+&nbsp;
+&nbsp;
+
+
+# PPC (Posterior Predictive Check)
+
+```{r, message=F, warning=F}
+# Load PPC simulated data
+ppc.data <- bind_rows(
+  read_csv(paste0(basePath, "study3/DataAnalysis/HDDM/03 Posterior Predictive/m04_cat_va_fair1_simData.csv")),
+  read_csv(paste0(basePath, "study3/DataAnalysis/HDDM/03 Posterior Predictive/m04_cat_va_fair2_simData.csv")),
+  read_csv(paste0(basePath, "study3/DataAnalysis/HDDM/03 Posterior Predictive/m04_cat_va_fair3_simData.csv")),
+  read_csv(paste0(basePath, "study4/DataAnalysis/HDDM/03 Posterior Predictive/m04_cat_va_fair1_simData.csv")),
+  read_csv(paste0(basePath, "study4/DataAnalysis/HDDM/03 Posterior Predictive/m04_cat_va_fair2_simData.csv")),
+  read_csv(paste0(basePath, "study4/DataAnalysis/HDDM/03 Posterior Predictive/m04_cat_va_fair3_simData.csv"))) %>%
+  select(sub = subj_idx,
+         study,
+         fair = fair_cat,
+         rev = rev_con,
+         rt_sim = rt_sampled,
+         rt_obs = rt) %>%
+  mutate(choice_sim = if_else(rt_sim > 0, 1, 0),
+         choice_obs = if_else(rt_obs > 0, 1, 0),
+         rt_sim = abs(rt_sim),
+         rt_obs = abs(rt_obs),
+         rev = if_else(is.na(rev), "Alone", as.character(rev))) %>%
+  mutate(rev = factor(rev, levels=c("Alone", "0", "1", "2", "3", "4")),
+         study = factor(study, levels=c("Victim", "Juror")),
+         fair = recode(fair, "fair"="Mildly Unfair",
+                       "amb"="Somewhat Unfair",
+                       "unfair"="Highly Unfair"),
+         fair = factor(fair, levels=c("Mildly Unfair", "Somewhat Unfair", "Highly Unfair")))
+```
+
+
+## RT density comparison
+
+The analytical comparison is a fairly hefty datatable, so we'll refrain from printing it here. For interested parties, it is saved as a CSV file for easy viewing.
+
+```{r}
+# Prep dataset for plotting
+ppc.rt <- ppc.data %>%
+  select(-choice_sim) %>%
+  rename(choice = choice_obs) %>%
+  mutate(choice = recode(choice, `0`="Compensate", `1`="Reverse")) %>%
+  gather(comparison, rt, rt_sim:rt_obs) %>%
+  mutate(comparison = recode(comparison, "rt_sim"="Simulated", "rt_obs"="Observed"),
+         rev = recode(rev, "0"="0%", "1"="25%", "2"="50%", "3"="75%", "4"="100%"))
+
+# Plot Victim PPC
+ggplot(ppc.rt %>% filter(study=="Victim"), aes(rt, color=choice, linetype=comparison)) +
+  ggdensity +
+  facet_grid(rev ~ fair) +
+  coord_cartesian(xlim = c(0.3, 3)) +
+  ggtitle("Victim") +
+  xlab("Reaction Time (seconds)") +
+  ylab("") +
+  scale_color_manual(name = "Choice:", values=c("#bdbdbd", "#525252")) +
+  scale_linetype(name = "Data:")
+
+ggsave(paste0(plotPath, "Fig S7A Victim PPC RT", ".pdf"),
+       plot=last_plot(), height=5, width=5, units='in', dpi=300, useDingbats=FALSE)
+
+# Plot Juror PPC
+ggplot(ppc.rt %>% filter(study=="Juror"), aes(rt, color=choice, linetype=comparison)) +
+  ggdensity +
+  facet_grid(rev ~ fair) +
+  coord_cartesian(xlim = c(0.3, 3)) +
+  ggtitle("Juror") +
+  xlab("Reaction Time (seconds)") +
+  ylab("") +
+  scale_color_manual(name = "Choice:", values=c("#bdbdbd", "#525252")) +
+  scale_linetype(name = "Data:")
+
+ggsave(paste0(plotPath, "Fig S7B Juror PPC RT", ".pdf"),
+       plot=last_plot(), height=5, width=5, units='in', dpi=300, useDingbats=FALSE)
+
+# Compute PPC statistics and save as CSV
+ppc.rt.stats <- ppc.rt %>%
+  group_by(sub, study, fair, rev, choice, comparison) %>%
+  summarise(rtMean = mean(rt),
+            rtSD = sd(rt),
+            rt10 = quantile(rt, prob = 0.1, type = 7),
+            rt30 = quantile(rt, prob = 0.3, type = 7),
+            rt50 = quantile(rt, prob = 0.5, type = 7),
+            rt70 = quantile(rt, prob = 0.7, type = 7),
+            rt90 = quantile(rt, prob = 0.9, type = 7)) %>%
+  group_by(study, fair, rev, choice, comparison) %>%
+  summarise(rtMean_mean = mean(rtMean, na.rm=T),
+            rtSD_mean = mean(rtSD, na.rm=T),
+            rt10_mean = mean(rt10, na.rm=T),
+            rt30_mean = mean(rt30, na.rm=T),
+            rt50_mean = mean(rt50, na.rm=T),
+            rt70_mean = mean(rt70, na.rm=T),
+            rt90_mean = mean(rt90, na.rm=T),
+            rtMean_sd = sd(rtMean, na.rm=T),
+            rtSD_sd = sd(rtSD, na.rm=T),
+            rt10_sd = sd(rt10, na.rm=T),
+            rt30_sd = sd(rt30, na.rm=T),
+            rt50_sd = sd(rt50, na.rm=T),
+            rt70_sd = sd(rt70, na.rm=T),
+            rt90_sd = sd(rt90, na.rm=T),
+            rtMean_credLower = quantile(rtMean, prob = 0.025, type = 7, na.rm=T),
+            rtMean_credUpper = quantile(rtMean, prob = 0.975, type = 7, na.rm=T),
+            rtSD_credLower = quantile(rtSD, prob = 0.025, type = 7, na.rm=T),
+            rtSD_credUpper = quantile(rtSD, prob = 0.975, type = 7, na.rm=T),
+            rt10_credLower = quantile(rt10, prob = 0.025, type = 7, na.rm=T),
+            rt10_credUpper = quantile(rt10, prob = 0.975, type = 7, na.rm=T),
+            rt30_credLower = quantile(rt30, prob = 0.025, type = 7, na.rm=T),
+            rt30_credUpper = quantile(rt30, prob = 0.975, type = 7, na.rm=T),
+            rt50_credLower = quantile(rt50, prob = 0.025, type = 7, na.rm=T),
+            rt50_credUpper = quantile(rt50, prob = 0.975, type = 7, na.rm=T),
+            rt70_credLower = quantile(rt70, prob = 0.025, type = 7, na.rm=T),
+            rt70_credUpper = quantile(rt70, prob = 0.975, type = 7, na.rm=T),
+            rt90_credLower = quantile(rt90, prob = 0.025, type = 7, na.rm=T),
+            rt90_credUpper = quantile(rt90, prob = 0.975, type = 7, na.rm=T))
+write_csv(ppc.rt.stats,
+          path=paste0(savePath, "ppc_rt_stats.csv"))
+```
+
+
+## Punishment rate comparison
+
+```{r}
+# Find mean punishment for each subject to check for significant PPC deviances
+ppc.choice <- ppc.data %>%
+  select(-c(rt_sim, rt_obs)) %>%
+  gather(comparison, value, choice_sim:choice_obs) %>%
+  group_by(sub, study, fair, rev, comparison) %>%
+  summarise(value = mean(value)) %>%
+  ungroup() %>%
+  mutate(sub = if_else(study=="Juror", sub-300, sub))
+
+# Check for significant PPC deviances: Victim
+suppressWarnings(ez::ezANOVA(
+  data = ppc.choice %>% filter(study=="Victim" & sub!=12),
+  dv = value,
+  wid = sub,
+  within = .(fair, rev, comparison),
+  type = 3
+)) %>% kable()
+
+# Check for significant PPC deviances: Juror
+suppressWarnings(ez::ezANOVA(
+  data = ppc.choice %>% filter(study=="Juror"),
+  dv = value,
+  wid = sub,
+  within = .(fair, rev, comparison),
+  type = 3
+)) %>% kable()
+
+# Plot subjects' punishment rates
+plotSubPunishRates <- ppc.choice %>%
+  ungroup() %>%
+  filter(comparison=="choice_obs") %>%
+  select(-comparison) %>%
+  mutate(rev = recode(rev, "0"="0%", "1"="25%", "2"="50%", "3"="75%", "4"="100%"))
+
+ggplot(plotSubPunishRates %>% filter(study=="Victim"), aes(x=sub, y=value)) +
+  gg + theme(axis.text.x  = element_text(size = 9, angle = 0, vjust = 0.5)) +
+  facet_grid(rev~fair) +
+  coord_cartesian(ylim = c(0, 1)) +
+  ggtitle("Victim") +
+  scale_y_continuous(name="Punishment Rate", labels=scales::percent) +
+  scale_x_continuous(name="Subject ID") +
+  geom_bar(stat = "identity", position = position_dodge(), fill = "white", color = "black") +
+  geom_hline(yintercept=0.5, linetype="dashed", size=0.6, color="#bdbdbd")
+
+ggsave(paste0(plotPath, "Fig S8A PunishRates Victim", ".pdf"),
+       plot=last_plot(), height=5, width=10, units='in', dpi=300, useDingbats=FALSE)
+
+ggplot(plotSubPunishRates %>% filter(study=="Juror"), aes(x=sub, y=value)) +
+  gg + theme(axis.text.x  = element_text(size = 9, angle = 0, vjust = 0.5)) +
+  facet_grid(rev~fair) +
+  coord_cartesian(ylim = c(0, 1)) +
+  ggtitle("Juror") +
+  scale_y_continuous(name="Punishment Rate", labels=scales::percent) +
+  scale_x_continuous(name="Subject ID") +
+  geom_bar(stat = "identity", position = position_dodge(), fill = "white", color = "black") +
+  geom_hline(yintercept=0.5, linetype="dashed", size=0.6, color="#bdbdbd")
+
+ggsave(paste0(plotPath, "Fig S8B PunishRates Juror", ".pdf"),
+       plot=last_plot(), height=5, width=10, units='in', dpi=300, useDingbats=FALSE)
+
+# Plot PPC
+ppc.choice.plot <- ppc.choice %>%
+  group_by(study, fair, rev, comparison) %>%
+  summarise(Mean=mean(value), SD=sd(value), N=n(), SE=SD/sqrt(N)) %>%
+  mutate(CI.lower = Mean - qt(1 - (0.05 / 2), N - 1) * SE,
+         CI.upper = Mean + qt(1 - (0.05 / 2), N - 1) * SE) %>%
+  mutate(comparison = recode(comparison, "choice_obs"="Observed", "choice_sim"="Simulated"))
+
+ggplot(ppc.choice.plot, aes(x=rev, y=Mean, fill=comparison)) +
+  gg +
+  geom_bar(stat="identity", position=position_dodge(), color="black") +
+  geom_errorbar(aes(ymin=Mean-SE, ymax=Mean+SE), width=.2, linetype="solid",
+                position=position_dodge(0.9)) +
+  facet_grid(study ~ fair) +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_x_discrete(name="% Punishers", labels=c("Alone", "0", "25", "50", "75", "100")) +
+  scale_y_continuous(name="p(Punish)", labels=scales::percent) +
+  scale_fill_manual(name="Data:", values=c("#ffffff", "#bdbdbd"))
+
+ggsave(paste0(plotPath, "Fig S9 PPC Choice", ".pdf"),
+       plot=last_plot(), height=5, width=10, units='in', dpi=300, useDingbats=FALSE)
+```
+
+
+&nbsp;
+&nbsp;
+
+
+# Parameter recovery
+
+```{r, message=F, warning=F}
+# Load parameter recovery data
+recovery.data <- bind_rows(
+  read_csv(paste0(basePath, "study3/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair1_20trials_traces.csv")) %>%
+    mutate(study="Victim", fair="Mildly Unfair", nSimTrials=20L),
+  read_csv(paste0(basePath, "study3/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair2_20trials_traces.csv")) %>%
+    mutate(study="Victim", fair="Somewhat Unfair", nSimTrials=20L),
+  read_csv(paste0(basePath, "study3/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair3_20trials_traces.csv")) %>%
+    mutate(study="Victim", fair="Highly Unfair", nSimTrials=20L),
+  
+  read_csv(paste0(basePath, "study3/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair1_100trials_traces.csv")) %>%
+    mutate(study="Victim", fair="Mildly Unfair", nSimTrials=100L),
+  read_csv(paste0(basePath, "study3/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair2_100trials_traces.csv")) %>%
+    mutate(study="Victim", fair="Somewhat Unfair", nSimTrials=100L),
+  read_csv(paste0(basePath, "study3/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair3_100trials_traces.csv")) %>%
+    mutate(study="Victim", fair="Highly Unfair", nSimTrials=100L),
+  
+  read_csv(paste0(basePath, "study4/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair1_20trials_traces.csv")) %>%
+    mutate(study="Juror", fair="Mildly Unfair", nSimTrials=20L),
+  read_csv(paste0(basePath, "study4/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair2_20trials_traces.csv")) %>%
+    mutate(study="Juror", fair="Somewhat Unfair", nSimTrials=20L),
+  read_csv(paste0(basePath, "study4/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair3_20trials_traces.csv")) %>%
+    mutate(study="Juror", fair="Highly Unfair", nSimTrials=20L),
+  
+  read_csv(paste0(basePath, "study4/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair1_100trials_traces.csv")) %>%
+    mutate(study="Juror", fair="Mildly Unfair", nSimTrials=100L),
+  read_csv(paste0(basePath, "study4/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair2_100trials_traces.csv")) %>%
+    mutate(study="Juror", fair="Somewhat Unfair", nSimTrials=100L),
+  read_csv(paste0(basePath, "study4/DataAnalysis/HDDM/04 Parameter Recovery/Traces/recovery_m04_cat_va_fair3_100trials_traces.csv")) %>%
+    mutate(study="Juror", fair="Highly Unfair", nSimTrials=100L)
+  ) %>%
+  select(study, fair, nSimTrials,
+         vA = v_Intercept,
+         v0 = `v_C(condition, Treatment('rev_A'))[T.rev_0]`,
+         v1 = `v_C(condition, Treatment('rev_A'))[T.rev_1]`,
+         v2 = `v_C(condition, Treatment('rev_A'))[T.rev_2]`,
+         v3 = `v_C(condition, Treatment('rev_A'))[T.rev_3]`,
+         v4 = `v_C(condition, Treatment('rev_A'))[T.rev_4]`,
+         aA = a_Intercept,
+         a0 = `a_C(condition, Treatment('rev_A'))[T.rev_0]`,
+         a1 = `a_C(condition, Treatment('rev_A'))[T.rev_1]`,
+         a2 = `a_C(condition, Treatment('rev_A'))[T.rev_2]`,
+         a3 = `a_C(condition, Treatment('rev_A'))[T.rev_3]`,
+         a4 = `a_C(condition, Treatment('rev_A'))[T.rev_4]`,
+         t, z=z_trans) %>%
+  mutate(z = boot::inv.logit(z)) %>%
+  group_by(study, fair, nSimTrials) %>%
+  nest() %>%
+  mutate(mapID = as.character(row_number()))
+
+# Find HDIs of all parameter recovery data
+recovery.hdi <- recovery.data$data %>%
+  map_dfr(~HDInterval::hdi(.x, credMass = 0.95) %>%
+            as.data.frame() %>%
+            mutate(whichBound=c("lower", "upper")),
+          .id="mapID") %>%
+  left_join(., recovery.data %>% select(-data)) %>%
+  select(mapID, study, fair, nSimTrials, whichBound, everything()) %>%
+  gather(parameter, value, vA:z) %>%
+  spread(whichBound, value) %>%
+  inner_join(., save.param.cat %>% select(-c(mapID, pvalue, sig))) %>%
+  arrange(as.numeric(mapID)) %>%
+  mutate(meanWithinHDI = if_else(estimate >= lower & estimate <= upper, T, F))
+
+# Print out any cases in which the mean parameter estimate is not contained within the HDI
+recovery.hdi %>% filter(meanWithinHDI==F) %>% kable()
+
+# Save the full table of HDIs
+write_csv(recovery.hdi,
+          path=paste0(savePath, "parameter_recovery", ".csv"))
+```
+
+
